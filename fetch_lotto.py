@@ -9,6 +9,7 @@ import io
 import os
 import sys
 import time
+import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -16,7 +17,9 @@ from datetime import datetime
 SOURCE = "https://www.national-lottery.co.uk/results/lotto/draw-history/csv"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "lotto.csv")
 FIELDS = ["DrawDate", "Ball 1", "Ball 2", "Ball 3", "Ball 4", "Ball 5", "Ball 6",
-          "Bonus Ball", "DrawNumber"]
+          "Bonus Ball", "DrawNumber",
+          "Set 2 Ball 1", "Set 2 Ball 2", "Set 2 Ball 3", "Set 2 Ball 4", "Set 2 Ball 5",
+          "Set 2 Ball 6", "Set 2 Bonus"]
 
 # Ordinary browser headers – the site refuses requests that don't look like a browser.
 HEADERS = {
@@ -66,6 +69,46 @@ def norm(h):
 
 
 def parse(text):
+    if text.lstrip().startswith("<"):
+        return parse_xml(text)
+    return parse_csv(text)
+
+
+def parse_xml(text):
+    """Current site format: the latest draw only, with two ball sets (L1 and L2)."""
+    try:
+        root = ET.fromstring(text.strip())
+    except ET.ParseError as e:
+        fail(f"Could not read the results (not valid XML: {e}): " + text[:300].replace("\n", " "))
+    draws = {}
+    for game in root.iter("game"):
+        if game.get("type", "lotto") != "lotto":
+            continue
+        d = parse_date(game.findtext("draw/draw-date", ""))
+        no = game.findtext("draw/draw-number", "").strip()
+        sets = []
+        for bs in game.findall("balls"):
+            balls = sorted((int(b.get("number", 0)), int(b.text)) for b in bs.findall("ball"))
+            nums = [n for _, n in balls]
+            bonus = bs.findtext("bonus-ball", "").strip()
+            sets.append((bs.findtext("set", "").strip(), nums, bonus))
+        sets.sort(key=lambda x: x[0])  # L1 first
+        if not d or not sets or len(sets[0][1]) != 6:
+            continue
+        if not all(1 <= n <= 59 for _, nums, _ in sets for n in nums):
+            continue
+        row = [d.isoformat(), *map(str, sets[0][1]), sets[0][2], no]
+        if len(sets) > 1 and len(sets[1][1]) == 6:
+            row += [*map(str, sets[1][1]), sets[1][2]]
+        else:
+            row += [""] * 7
+        draws[d.isoformat()] = row
+    if not draws:
+        fail("No Lotto draw found in the results: " + text[:300].replace("\n", " "))
+    return draws
+
+
+def parse_csv(text):
     rows = list(csv.reader(io.StringIO(text)))
     if len(rows) < 2:
         fail("Download had no rows – the site may have sent a block page: " + text[:3000].replace("\n", " "))
@@ -91,7 +134,7 @@ def parse(text):
             continue
         bonus = r[i_bonus].strip() if i_bonus is not None and i_bonus < len(r) else ""
         no = r[i_no].strip() if i_no is not None and i_no < len(r) else ""
-        draws[d.isoformat()] = [d.isoformat(), *map(str, balls), bonus, no]
+        draws[d.isoformat()] = [d.isoformat(), *map(str, balls), bonus, no] + [""] * 7
     return draws
 
 
@@ -99,7 +142,8 @@ def load_existing():
     if not os.path.exists(OUT):
         return {}
     with open(OUT, newline="", encoding="utf-8") as f:
-        return {row[0]: row for row in list(csv.reader(f))[1:] if row}
+        rows = list(csv.reader(f))[1:]
+    return {r[0]: (r + [""] * len(FIELDS))[:len(FIELDS)] for r in rows if r}
 
 
 def main():
@@ -108,7 +152,11 @@ def main():
         fail("No valid draws found in the download.")
     merged = load_existing()
     added = [d for d in new if d not in merged]
-    merged.update(new)
+    for d, row in new.items():
+        # Never wipe a saved second set with a blank one.
+        if d in merged and not any(row[9:]) and any(merged[d][9:]):
+            row = row[:9] + merged[d][9:]
+        merged[d] = row
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", newline="", encoding="utf-8") as f:
@@ -118,7 +166,8 @@ def main():
             w.writerow(merged[d])
 
     latest = max(merged)
-    print(f"{len(merged)} draws saved, {len(added)} new. Latest: {latest} {merged[latest][1:7]}")
+    print(f"{len(merged)} draws saved, {len(added)} new. "
+          f"Latest: {latest} set 1 {merged[latest][1:7]} set 2 {merged[latest][9:15]}")
 
 
 if __name__ == "__main__":
