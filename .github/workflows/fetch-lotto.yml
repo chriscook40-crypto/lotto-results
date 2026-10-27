@@ -1,0 +1,38 @@
+name: Fetch Lotto results
+
+on:
+  schedule:
+    # Saturday Lotto draw is around 8pm UK time. Times below are UTC.
+    - cron: "30 21 * * 6"   # Sat 21:30
+    - cron: "15 23 * * 6"   # Sat 23:15 (backup)
+    - cron: "0 8 * * 0"     # Sun 08:00 (backup)
+    - cron: "30 21 * * 3"   # Wed 21:30 (in case Wednesday draws are ever used)
+  workflow_dispatch:         # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download results
+        run: python fetch_lotto.py
+
+      - name: Save if changed
+        run: |
+          git config user.name "lotto-bot"
+          git config user.email "lotto-bot@users.noreply.github.com"
+          git add data/lotto.csv
+          if git diff --cached --quiet; then
+            echo "No new draws."
+          else
+            git commit -m "Lotto results $(date -u +%Y-%m-%d)"
+            git push
+          fi
