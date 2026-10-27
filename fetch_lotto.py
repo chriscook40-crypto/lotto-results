@@ -9,6 +9,7 @@ import io
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 
@@ -34,11 +35,20 @@ def download(url, tries=3):
             req = urllib.request.Request(url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=30) as r:
                 return r.read().decode("utf-8-sig")
+        except urllib.error.HTTPError as e:
+            body = e.read()[:200].decode("utf-8", "replace").replace("\n", " ")
+            last = f"HTTP {e.code} {e.reason} – {body}"
         except Exception as e:  # noqa: BLE001
-            last = e
-            print(f"Attempt {attempt} failed: {e}", file=sys.stderr)
-            time.sleep(10 * attempt)
-    raise SystemExit(f"Could not download results: {last}")
+            last = f"{type(e).__name__}: {e}"
+        print(f"Attempt {attempt} failed: {last}", file=sys.stderr)
+        time.sleep(10 * attempt)
+    fail(f"Could not download results: {last}")
+
+
+def fail(msg):
+    # ::error:: shows the message on the run's summary page.
+    print(f"::error::{msg}")
+    raise SystemExit(1)
 
 
 def parse_date(s):
@@ -58,13 +68,13 @@ def norm(h):
 def parse(text):
     rows = list(csv.reader(io.StringIO(text)))
     if len(rows) < 2:
-        raise SystemExit("Download had no rows – the site may have sent a block page.")
+        fail("Download had no rows – the site may have sent a block page: " + text[:200].replace("\n", " "))
     head = [norm(h) for h in rows[0]]
     try:
         i_date = next(i for i, h in enumerate(head) if "date" in h)
         i_balls = [head.index(f"ball{n}") for n in range(1, 7)]
     except (StopIteration, ValueError):
-        raise SystemExit(f"Unexpected file layout: {rows[0][:12]}")
+        fail(f"Unexpected file layout: {rows[0][:12]}")
     i_bonus = next((i for i, h in enumerate(head) if "bonus" in h), None)
     i_no = next((i for i, h in enumerate(head) if h == "drawnumber"), None)
 
@@ -95,7 +105,7 @@ def load_existing():
 def main():
     new = parse(download(SOURCE))
     if not new:
-        raise SystemExit("No valid draws found in the download.")
+        fail("No valid draws found in the download.")
     merged = load_existing()
     added = [d for d in new if d not in merged]
     merged.update(new)
