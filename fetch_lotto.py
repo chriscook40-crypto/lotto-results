@@ -68,7 +68,7 @@ def norm(h):
 def parse(text):
     rows = list(csv.reader(io.StringIO(text)))
     if len(rows) < 2:
-        fail("Download had no rows – the site may have sent a block page: " + text[:200].replace("\n", " "))
+        fail("Download had no rows – the site may have sent a block page: " + text[:3000].replace("\n", " "))
     head = [norm(h) for h in rows[0]]
     try:
         i_date = next(i for i, h in enumerate(head) if "date" in h)
